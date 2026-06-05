@@ -67,6 +67,9 @@ pub struct SimpleUnc {
     /// but exists to allow using `, ..Default::default()`
     /// even when all other fields are specified.
     pub _unused: bool,
+
+    #[cfg(all(test, windows))]
+    drives: Option<Drives>,
 }
 
 impl SimpleUnc {
@@ -101,7 +104,7 @@ impl SimpleUnc {
     #[cfg(windows)]
     fn _simplify<'a>(&self, path: &'a Path) -> anyhow::Result<Option<Cow<'a, Path>>> {
         // Try mapped network share drives.
-        if let Some(drive_path) = Drives::drive_path(path)? {
+        if let Some(drive_path) = self.drive_path(path)? {
             if self.map_to_drive {
                 return Ok(Some(Cow::Owned(drive_path.to_path_buf())));
             }
@@ -118,6 +121,15 @@ impl SimpleUnc {
             }
         }
         Ok(None)
+    }
+
+    #[cfg(windows)]
+    fn drive_path<'a>(&self, path: &'a Path) -> anyhow::Result<Option<crate::DrivePath<'a>>> {
+        #[cfg(test)]
+        if let Some(drives) = &self.drives {
+            return Ok(drives._drive_path(path));
+        }
+        Drives::drive_path(path)
     }
 
     /// Refreshes the cached information.
@@ -139,10 +151,54 @@ fn io_error_from_anyhow(error: anyhow::Error) -> io::Error {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    fn mock_with_drive() -> SimpleUnc {
+        SimpleUnc {
+            drives: Some(Drives::with_drives(vec![
+                ('X', PathBuf::from(r"\\?\UNC\server\share")),
+                ('Z', PathBuf::from(r"\\?\UNC\server2\share2")),
+            ])),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn simplify_none() {
         let unc = SimpleUnc::default();
         assert_eq!(unc.simplify(Path::new(r"C:\foo")).unwrap(), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn simplify_drive_none() {
+        let unc = mock_with_drive();
+        assert_eq!(unc.simplify(Path::new(r"C:\foo")).unwrap(), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn simplify_drive_unc() {
+        let mut unc = mock_with_drive();
+        let path = Path::new(r"\\?\UNC\server\share\foo");
+        let path2 = Path::new(r"\\?\UNC\server2\share2\foo2");
+        assert_eq!(
+            unc.simplify(path).unwrap(),
+            Some(Cow::Owned(PathBuf::from(r"\\server\share\foo")))
+        );
+        assert_eq!(
+            unc.simplify(path2).unwrap(),
+            Some(Cow::Owned(PathBuf::from(r"\\server2\share2\foo2")))
+        );
+
+        unc.map_to_drive = true;
+        assert_eq!(
+            unc.simplify(path).unwrap(),
+            Some(Cow::Owned(PathBuf::from(r"X:\foo")))
+        );
+        assert_eq!(
+            unc.simplify(path2).unwrap(),
+            Some(Cow::Owned(PathBuf::from(r"Z:\foo2")))
+        );
     }
 
     #[cfg(windows)]
