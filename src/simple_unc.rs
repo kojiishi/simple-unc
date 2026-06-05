@@ -20,6 +20,11 @@ pub struct SimpleUnc {
     /// the result should be `Z:\dir\file.txt`
     /// instead of `\\server\share\dir\file.txt`.
     pub map_to_drive: bool,
+
+    /// Skip the [`dunce`] crate simplification.
+    ///
+    /// [`dunce`]: https://crates.io/crates/dunce
+    pub skip_dunce: bool,
 }
 
 impl SimpleUnc {
@@ -45,10 +50,12 @@ impl SimpleUnc {
                 }
             }
 
-            // Try `dunce::simplified`.
-            let simplified = dunce::simplified(path);
-            if !std::ptr::eq(path, simplified) {
-                return Ok(Some(Cow::Borrowed(simplified)));
+            if !self.skip_dunce {
+                // Try `dunce::simplified`.
+                let simplified = dunce::simplified(path);
+                if !std::ptr::eq(path, simplified) {
+                    return Ok(Some(Cow::Borrowed(simplified)));
+                }
             }
         }
         Ok(None)
@@ -80,5 +87,15 @@ mod tests {
             unc.simplify(Path::new(r"\\?\C:\foo")).unwrap(),
             Some(Cow::Borrowed(Path::new(r"C:\foo")))
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn simplify_dunce_skip() {
+        let unc = SimpleUnc {
+            skip_dunce: true,
+            ..Default::default()
+        };
+        assert_eq!(unc.simplify(Path::new(r"\\?\C:\foo")).unwrap(), None);
     }
 }
