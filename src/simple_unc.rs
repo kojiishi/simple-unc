@@ -45,7 +45,7 @@ impl SimpleUnc {
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -55,6 +55,7 @@ mod tests {
         assert_eq!(unc.simplify(Path::new(r"C:\foo")).unwrap(), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn simplify_dunce() {
         let unc = SimpleUnc::default();
