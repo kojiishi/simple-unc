@@ -1,3 +1,4 @@
+#![cfg_attr(not(target_os = "windows"), allow(unused))]
 #[cfg(windows)]
 use crate::Drives;
 use std::{
@@ -39,7 +40,8 @@ impl SimpleUnc {
     /// Refreshes the cached information.
     pub fn refresh() -> anyhow::Result<()> {
         #[cfg(windows)]
-        Drives::refresh()
+        Drives::refresh()?;
+        Ok(())
     }
 }
 
