@@ -3,7 +3,7 @@
 use crate::{Drives, PathExt};
 use std::{
     borrow::Cow,
-    fs,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -28,7 +28,7 @@ pub struct SimpleUnc {
 }
 
 impl SimpleUnc {
-    pub fn canonicalize(&self, path: impl AsRef<Path>) -> anyhow::Result<PathBuf> {
+    pub fn canonicalize(&self, path: impl AsRef<Path>) -> io::Result<PathBuf> {
         let canonicalized = fs::canonicalize(path)?;
         #[cfg(windows)]
         if let Some(simplified) = self.simplify(&canonicalized)? {
@@ -37,35 +37,47 @@ impl SimpleUnc {
         Ok(canonicalized)
     }
 
-    pub fn simplify<'a>(&self, path: &'a Path) -> anyhow::Result<Option<Cow<'a, Path>>> {
+    pub fn simplify<'a>(&self, path: &'a Path) -> io::Result<Option<Cow<'a, Path>>> {
         #[cfg(windows)]
-        {
-            // Try mapped network share drives.
-            if let Some(drive_path) = Drives::drive_path(path)? {
-                if self.map_to_drive {
-                    return Ok(Some(Cow::Owned(drive_path.to_path_buf())));
-                }
-                if let Some(unc) = path.unc_from_win32_file_namespace() {
-                    return Ok(Some(Cow::Owned(unc)));
-                }
-            }
+        return self._simplify(path).map_err(io_error_from_anyhow);
+        #[cfg(not(windows))]
+        Ok(None)
+    }
 
-            if !self.skip_dunce {
-                // Try `dunce::simplified`.
-                let simplified = dunce::simplified(path);
-                if !std::ptr::eq(path, simplified) {
-                    return Ok(Some(Cow::Borrowed(simplified)));
-                }
+    #[cfg(windows)]
+    fn _simplify<'a>(&self, path: &'a Path) -> anyhow::Result<Option<Cow<'a, Path>>> {
+        // Try mapped network share drives.
+        if let Some(drive_path) = Drives::drive_path(path)? {
+            if self.map_to_drive {
+                return Ok(Some(Cow::Owned(drive_path.to_path_buf())));
+            }
+            if let Some(unc) = path.unc_from_win32_file_namespace() {
+                return Ok(Some(Cow::Owned(unc)));
+            }
+        }
+
+        if !self.skip_dunce {
+            // Try `dunce::simplified`.
+            let simplified = dunce::simplified(path);
+            if !std::ptr::eq(path, simplified) {
+                return Ok(Some(Cow::Borrowed(simplified)));
             }
         }
         Ok(None)
     }
 
     /// Refreshes the cached information.
-    pub fn refresh() -> anyhow::Result<()> {
+    pub fn refresh() -> io::Result<()> {
         #[cfg(windows)]
-        Drives::refresh()?;
+        Drives::refresh().map_err(io_error_from_anyhow)?;
         Ok(())
+    }
+}
+
+fn io_error_from_anyhow(error: anyhow::Error) -> io::Error {
+    match error.downcast::<io::Error>() {
+        Ok(io_error) => io_error,
+        Err(other_error) => io::Error::other(other_error),
     }
 }
 
