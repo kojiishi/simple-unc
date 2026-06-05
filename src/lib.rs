@@ -3,6 +3,7 @@
 //!
 //! [README]: https://github.com/kojiishi/simple-unc
 
+mod display;
 #[cfg(windows)]
 mod drive_path;
 #[cfg(windows)]
@@ -11,6 +12,7 @@ mod drives;
 mod path_ext;
 mod simple_unc;
 
+pub use display::Display;
 #[cfg(windows)]
 pub(crate) use drive_path::DrivePath;
 #[cfg(windows)]

@@ -1,4 +1,5 @@
 #![cfg_attr(not(target_os = "windows"), allow(unused))]
+use crate::Display;
 #[cfg(windows)]
 use crate::{Drives, PathExt};
 use std::{
@@ -25,7 +26,7 @@ use std::{
 ///
 /// [`map_to_drive`]: `SimpleUnc::map_to_drive`
 /// [Win32 File Namespaces]: https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#win32-file-namespaces
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct SimpleUnc {
     /// Map to the network share drive when possible.
     /// ```
@@ -138,6 +139,34 @@ impl SimpleUnc {
         Drives::refresh().map_err(io_error_from_anyhow)?;
         Ok(())
     }
+
+    /// Returns an object that implements [`Display`][`core::fmt::Display`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::path::Path;
+    /// # use simple_unc::SimpleUnc;
+    /// # fn test() -> std::io::Result<()> {
+    /// let path = Path::new("file").canonicalize()?;
+    /// println!("{}", SimpleUnc::default().display(&path));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn display<'a>(&'a self, path: &'a Path) -> Display<'a> {
+        Display::new(self, path)
+    }
+
+    #[cfg(all(test, windows))]
+    pub(crate) fn mock_with_drive() -> SimpleUnc {
+        SimpleUnc {
+            drives: Some(Drives::with_drives(vec![
+                ('X', PathBuf::from(r"\\?\UNC\server\share")),
+                ('Z', PathBuf::from(r"\\?\UNC\server2\share2")),
+            ])),
+            ..Default::default()
+        }
+    }
 }
 
 fn io_error_from_anyhow(error: anyhow::Error) -> io::Error {
@@ -151,34 +180,23 @@ fn io_error_from_anyhow(error: anyhow::Error) -> io::Error {
 mod tests {
     use super::*;
 
-    #[cfg(windows)]
-    fn mock_with_drive() -> SimpleUnc {
-        SimpleUnc {
-            drives: Some(Drives::with_drives(vec![
-                ('X', PathBuf::from(r"\\?\UNC\server\share")),
-                ('Z', PathBuf::from(r"\\?\UNC\server2\share2")),
-            ])),
-            ..Default::default()
-        }
-    }
-
     #[test]
-    fn simplify_none() {
+    fn simplify_not_simplified() {
         let unc = SimpleUnc::default();
         assert_eq!(unc.simplify(Path::new(r"C:\foo")).unwrap(), None);
     }
 
     #[cfg(windows)]
     #[test]
-    fn simplify_drive_none() {
-        let unc = mock_with_drive();
+    fn simplify_drive_not_simplified() {
+        let unc = SimpleUnc::mock_with_drive();
         assert_eq!(unc.simplify(Path::new(r"C:\foo")).unwrap(), None);
     }
 
     #[cfg(windows)]
     #[test]
     fn simplify_drive_unc() {
-        let mut unc = mock_with_drive();
+        let mut unc = SimpleUnc::mock_with_drive();
         let path = Path::new(r"\\?\UNC\server\share\foo");
         let path2 = Path::new(r"\\?\UNC\server2\share2\foo2");
         assert_eq!(
