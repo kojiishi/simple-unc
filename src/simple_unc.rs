@@ -25,6 +25,14 @@ pub struct SimpleUnc {
     ///
     /// [`dunce`]: https://crates.io/crates/dunce
     pub skip_dunce: bool,
+
+    /// It is highly recommended to always use `, ..Default::default()`.
+    /// Otherwise builds fail when new fields are added.
+    ///
+    /// This field is not used in any ways,
+    /// but exists to allow using `, ..Default::default()`
+    /// even when all other fields are specified.
+    pub _unused: bool,
 }
 
 impl SimpleUnc {
