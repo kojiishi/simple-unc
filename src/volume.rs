@@ -98,12 +98,21 @@ impl Volume {
     }
 
     /// The shortest path wins.
-    /// If the lengths are the same, the lowest drive letter wins.
+    /// If paths are the same, the lowest drive letter wins.
     fn sort(mut volumes: Vec<Volume>) -> Vec<Volume> {
         volumes.sort_by(|a, b| {
             let mut cmp = a.path.as_os_str().len().cmp(&b.path.as_os_str().len());
             if cmp == Ordering::Equal {
-                cmp = a.drive_letter.cmp(&b.drive_letter);
+                cmp = a.path.cmp(&b.path);
+                if cmp == Ordering::Equal && a.drive_letter != b.drive_letter {
+                    if !a.has_drive() {
+                        cmp = Ordering::Greater;
+                    } else if !b.has_drive() {
+                        cmp = Ordering::Less;
+                    } else {
+                        cmp = a.drive_letter.cmp(&b.drive_letter);
+                    }
+                }
             }
             cmp
         });
@@ -307,14 +316,18 @@ mod tests {
         );
         assert_eq!(
             Volume::sort(vec![
+                Volume::new('\0', PathBuf::from("124")),
+                Volume::new('\0', PathBuf::from("123")),
                 Volume::new('C', PathBuf::from("12")),
                 Volume::new('A', PathBuf::from("123")),
-                Volume::new('B', PathBuf::from("12"))
+                Volume::new('B', PathBuf::from("12")),
             ]),
             vec![
                 Volume::new('B', PathBuf::from("12")),
                 Volume::new('C', PathBuf::from("12")),
-                Volume::new('A', PathBuf::from("123"))
+                Volume::new('A', PathBuf::from("123")),
+                Volume::new('\0', PathBuf::from("123")),
+                Volume::new('\0', PathBuf::from("124")),
             ]
         );
     }
