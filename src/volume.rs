@@ -170,18 +170,19 @@ impl Volume {
         let resources = unsafe { Self::_get_net_resources() }?;
         let mut volumes = Vec::with_capacity(resources.len());
         for (local, remote) in resources {
-            let Some(remote) = remote else {
+            if remote.is_empty() {
+                log::warn!("Remote is empty for {local:?}");
                 continue;
-            };
+            }
             let remote = Self::normalize_remote(&remote);
-            let drive_letter = Self::drive_letter_from_local(local);
+            let drive_letter = Self::drive_letter_from_local(&local);
             volumes.push(Volume::new(drive_letter, remote.as_ref()));
         }
         log::trace!("Net: elapsed {:?}", start.elapsed());
         Ok(volumes)
     }
 
-    unsafe fn _get_net_resources() -> windows::core::Result<Vec<(Option<String>, Option<String>)>> {
+    unsafe fn _get_net_resources() -> windows::core::Result<Vec<(String, String)>> {
         let mut shares = Vec::new();
         // for scope in [RESOURCE_CONNECTED, RESOURCE_REMEMBERED] {
         let mut henum = HANDLE::default();
@@ -223,8 +224,29 @@ impl Volume {
             let ptr = buffer.as_ptr() as *const NETRESOURCEW;
             for i in 0..entries {
                 let resource = unsafe { &*ptr.add(i) };
-                let local_name = unsafe { pwstr_to_string(resource.lpLocalName) };
-                let remote_name = unsafe { pwstr_to_string(resource.lpRemoteName) };
+                let remote_name = if resource.lpRemoteName.is_null() {
+                    log::warn!("lpRemoteName null");
+                    continue;
+                } else {
+                    match unsafe { resource.lpRemoteName.to_string() } {
+                        Ok(str) => str,
+                        Err(error) => {
+                            log::warn!("lpRemoteName invalid: {error}");
+                            continue;
+                        }
+                    }
+                };
+                let local_name = if resource.lpLocalName.is_null() {
+                    String::new()
+                } else {
+                    match unsafe { resource.lpLocalName.to_string() } {
+                        Ok(str) => str,
+                        Err(error) => {
+                            log::warn!("lpLocalName for {remote_name:?} invalid: {error}");
+                            String::new()
+                        }
+                    }
+                };
                 log::trace!("Net: {local_name:?} {remote_name:?}");
                 shares.push((local_name, remote_name));
             }
@@ -233,11 +255,8 @@ impl Volume {
         Ok(shares)
     }
 
-    fn drive_letter_from_local(local: Option<String>) -> char {
-        if let Some(local) = local
-            && local.len() == 2
-            && local.as_bytes()[1] == b':'
-        {
+    fn drive_letter_from_local(local: &str) -> char {
+        if local.len() == 2 && local.as_bytes()[1] == b':' {
             local.as_bytes()[0] as char
         } else {
             '\0'
@@ -250,20 +269,6 @@ impl Volume {
             return Cow::Owned(format!(r"\\?\UNC\{}", stripped));
         }
         Cow::Borrowed(remote)
-    }
-}
-
-unsafe fn pwstr_to_string(pwstr: windows::core::PWSTR) -> Option<String> {
-    if pwstr.0.is_null() {
-        return None;
-    }
-    let mut len = 0;
-    unsafe {
-        while *pwstr.0.add(len) != 0 {
-            len += 1;
-        }
-        let slice = std::slice::from_raw_parts(pwstr.0, len);
-        Some(String::from_utf16_lossy(slice))
     }
 }
 
