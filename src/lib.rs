@@ -19,4 +19,4 @@ pub(crate) use drive_path::DrivePath;
 pub(crate) use path_ext::PathExt;
 pub use simple_unc::SimpleUnc;
 #[cfg(windows)]
-pub(crate) use volume::Drives;
+pub(crate) use volume::Volumes;

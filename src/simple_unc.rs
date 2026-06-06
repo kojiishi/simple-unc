@@ -1,7 +1,7 @@
 #![cfg_attr(not(target_os = "windows"), allow(unused))]
 use crate::Display;
 #[cfg(windows)]
-use crate::{Drives, PathExt};
+use crate::{PathExt, Volumes};
 use std::{
     borrow::Cow,
     fs, io,
@@ -85,7 +85,7 @@ pub struct SimpleUnc {
     pub _unused: bool,
 
     #[cfg(all(test, windows))]
-    drives: Option<Drives>,
+    volumes: Option<Volumes>,
 }
 
 impl SimpleUnc {
@@ -145,16 +145,16 @@ impl SimpleUnc {
     #[cfg(windows)]
     fn drive_path<'a>(&self, path: &'a Path) -> anyhow::Result<Option<crate::DrivePath<'a>>> {
         #[cfg(test)]
-        if let Some(drives) = &self.drives {
-            return Ok(drives._drive_path(path));
+        if let Some(volumes) = &self.volumes {
+            return Ok(volumes._drive_path(path));
         }
-        Drives::drive_path(path)
+        Volumes::drive_path(path)
     }
 
     /// Refreshes the cached information.
     pub fn refresh() -> io::Result<()> {
         #[cfg(windows)]
-        Drives::refresh().map_err(io_error_from_anyhow)?;
+        Volumes::refresh().map_err(io_error_from_anyhow)?;
         Ok(())
     }
 
@@ -188,7 +188,7 @@ impl SimpleUnc {
     #[cfg(all(test, windows))]
     pub(crate) fn mock_with_drive() -> SimpleUnc {
         SimpleUnc {
-            drives: Some(Drives::mock()),
+            volumes: Some(Volumes::mock()),
             ..Default::default()
         }
     }

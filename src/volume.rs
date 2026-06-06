@@ -21,60 +21,47 @@ use windows::{
 
 const DRIVE_REMOTE: u32 = 4;
 
-static DRIVES: LazyLock<Mutex<Option<Drives>>> = LazyLock::new(|| Mutex::new(None));
+static VOLUMES: LazyLock<Mutex<Option<Volumes>>> = LazyLock::new(|| Mutex::new(None));
 
 #[derive(Clone, Debug)]
-pub(crate) struct Drives {
-    drives: Vec<Volume>,
+pub(crate) struct Volumes {
+    volumes: Vec<Volume>,
 }
 
-impl Drives {
+impl Volumes {
     fn new() -> anyhow::Result<Self> {
-        Ok(Self::with_drives(Volume::get_remote_volumes()?))
+        Ok(Self::with_volumes(Volume::get_remote_volumes()?))
     }
 
-    pub(crate) fn with_drives(mut drives: Vec<Volume>) -> Self {
-        drives = Self::sort_drives(drives);
-        Self { drives }
+    pub(crate) fn with_volumes(mut volumes: Vec<Volume>) -> Self {
+        volumes = Volume::sort(volumes);
+        Self { volumes }
     }
 
     #[cfg(all(test, windows))]
     pub(crate) fn mock() -> Self {
-        Self::with_drives(vec![
+        Self::with_volumes(vec![
             Volume::new('X', PathBuf::from(r"\\?\UNC\server\share")),
             Volume::new('Z', PathBuf::from(r"\\?\UNC\server2\share2")),
             Volume::new('\0', PathBuf::from(r"\\?\UNC\server0\share0")),
         ])
     }
 
-    /// The shortest path wins.
-    /// If the lengths are the same, the lowest drive letter wins.
-    fn sort_drives(mut drives: Vec<Volume>) -> Vec<Volume> {
-        drives.sort_by(|a, b| {
-            let mut cmp = a.path.as_os_str().len().cmp(&b.path.as_os_str().len());
-            if cmp == Ordering::Equal {
-                cmp = a.drive_letter.cmp(&b.drive_letter);
-            }
-            cmp
-        });
-        drives
-    }
-
     pub(crate) fn refresh() -> anyhow::Result<()> {
-        Drives::new()?.set_to_cache();
+        Volumes::new()?.set_to_cache();
         Ok(())
     }
 
     fn set_to_cache(self) {
-        let mut cache = DRIVES.lock().unwrap();
+        let mut cache = VOLUMES.lock().unwrap();
         *cache = Some(self);
     }
 
     pub(crate) fn drive_path<'a>(path: &'a Path) -> anyhow::Result<Option<DrivePath<'a>>> {
         let drives = {
-            let mut cache = DRIVES.lock().unwrap();
+            let mut cache = VOLUMES.lock().unwrap();
             if cache.is_none() {
-                *cache = Some(Drives::new()?);
+                *cache = Some(Volumes::new()?);
             }
             cache.as_ref().cloned().unwrap()
         };
@@ -82,7 +69,7 @@ impl Drives {
     }
 
     pub(crate) fn _drive_path<'a>(&self, path: &'a Path) -> Option<DrivePath<'a>> {
-        for volume in &self.drives {
+        for volume in &self.volumes {
             if let Ok(suffix) = path.strip_prefix_fix(&volume.path) {
                 return Some(DrivePath::new(volume.drive_letter, suffix));
             }
@@ -107,6 +94,19 @@ impl Volume {
 
     fn has_drive(&self) -> bool {
         self.drive_letter != '\0'
+    }
+
+    /// The shortest path wins.
+    /// If the lengths are the same, the lowest drive letter wins.
+    fn sort(mut volumes: Vec<Volume>) -> Vec<Volume> {
+        volumes.sort_by(|a, b| {
+            let mut cmp = a.path.as_os_str().len().cmp(&b.path.as_os_str().len());
+            if cmp == Ordering::Equal {
+                cmp = a.drive_letter.cmp(&b.drive_letter);
+            }
+            cmp
+        });
+        volumes
     }
 
     fn get_remote_volumes() -> anyhow::Result<Vec<Self>> {
@@ -279,14 +279,14 @@ mod tests {
     }
 
     #[test]
-    fn sort_drives() {
-        assert_eq!(Drives::sort_drives(vec![]), vec![]);
+    fn sort() {
+        assert_eq!(Volume::sort(vec![]), vec![]);
         assert_eq!(
-            Drives::sort_drives(vec![Volume::new('A', PathBuf::from("1"))]),
+            Volume::sort(vec![Volume::new('A', PathBuf::from("1"))]),
             vec![Volume::new('A', PathBuf::from("1"))]
         );
         assert_eq!(
-            Drives::sort_drives(vec![
+            Volume::sort(vec![
                 Volume::new('C', PathBuf::from("12")),
                 Volume::new('A', PathBuf::from("123")),
                 Volume::new('B', PathBuf::from("12"))
@@ -305,26 +305,26 @@ mod tests {
     // [Win32 File Namespaces]: https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#win32-file-namespaces
     #[test]
     fn drive_path_win32_file_namespaces() {
-        let drives = Drives::with_drives(vec![
+        let volumes = Volumes::with_volumes(vec![
             Volume::new('H', PathBuf::from(r"\\?\UNC\server\share\dir")),
             Volume::new('X', PathBuf::from(r"\\?\UNC\server\share")),
             Volume::new('Z', PathBuf::from(r"\\?\UNC\server2\share2")),
         ]);
         assert_eq!(
-            drives._drive_path(Path::new(r"\\?\UNC\server\share\dir\file.txt")),
+            volumes._drive_path(Path::new(r"\\?\UNC\server\share\dir\file.txt")),
             Some(DrivePath::new('X', Path::new(r"dir\file.txt")))
         );
         assert_eq!(
-            drives._drive_path(Path::new(r"\\?\UNC\server2\share2\dir2\file2.txt")),
+            volumes._drive_path(Path::new(r"\\?\UNC\server2\share2\dir2\file2.txt")),
             Some(DrivePath::new('Z', Path::new(r"dir2\file2.txt"))),
         );
         assert_eq!(
-            drives._drive_path(Path::new(r"\\?\UNC\server3\share3\dir3\file3.txt")),
+            volumes._drive_path(Path::new(r"\\?\UNC\server3\share3\dir3\file3.txt")),
             None,
         );
-        assert_eq!(drives._drive_path(Path::new(r"C:\Windows\System32")), None);
+        assert_eq!(volumes._drive_path(Path::new(r"C:\Windows\System32")), None);
 
-        let unmapped_drives = Drives::with_drives(vec![Volume::new(
+        let unmapped_drives = Volumes::with_volumes(vec![Volume::new(
             '\0',
             PathBuf::from(r"\\?\UNC\server\share"),
         )]);
