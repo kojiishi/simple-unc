@@ -6,6 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{LazyLock, Mutex},
+    time::Instant,
 };
 use windows::{
     Win32::{
@@ -136,6 +137,7 @@ impl Volume {
     }
 
     fn get_remote_drives() -> anyhow::Result<Vec<Self>> {
+        let start = Instant::now();
         let mut drive_mask = unsafe { GetLogicalDrives() };
         if drive_mask == 0 {
             return Err(windows::core::Error::from_thread().into());
@@ -149,8 +151,8 @@ impl Volume {
                 let drive_type = unsafe { GetDriveTypeW(PCWSTR(path_u16.as_ptr())) };
                 if drive_type == DRIVE_REMOTE {
                     // Use `fs::canonicalize` to match the expected inputs.
-                    println!("Drive {drive_letter}: {path:?}");
                     let canonicalized = fs::canonicalize(path)?;
+                    log::trace!("Drive: {drive_letter:?} {path:?} {canonicalized:?}");
                     drives.push(Self::new(drive_letter, canonicalized));
                 }
             }
@@ -159,10 +161,12 @@ impl Volume {
                 break;
             }
         }
+        log::trace!("Drive: elapsed {:?}", start.elapsed());
         Ok(drives)
     }
 
     fn get_net_resources() -> anyhow::Result<Vec<Volume>> {
+        let start = Instant::now();
         let resources = unsafe { Self::_get_net_resources() }?;
         let mut volumes = Vec::with_capacity(resources.len());
         for (local, remote) in resources {
@@ -173,6 +177,7 @@ impl Volume {
             let drive_letter = Self::drive_letter_from_local(local);
             volumes.push(Volume::new(drive_letter, remote.as_ref()));
         }
+        log::trace!("Net: elapsed {:?}", start.elapsed());
         Ok(volumes)
     }
 
@@ -220,7 +225,7 @@ impl Volume {
                 let resource = unsafe { &*ptr.add(i) };
                 let local_name = unsafe { pwstr_to_string(resource.lpLocalName) };
                 let remote_name = unsafe { pwstr_to_string(resource.lpRemoteName) };
-                println!("NetResource: {local_name:?}: {remote_name:?}");
+                log::trace!("Net: {local_name:?} {remote_name:?}");
                 shares.push((local_name, remote_name));
             }
         }
@@ -263,19 +268,29 @@ unsafe fn pwstr_to_string(pwstr: windows::core::PWSTR) -> Option<String> {
 }
 
 #[cfg(test)]
+static LOG_INIT: LazyLock<bool> = LazyLock::new(|| {
+    env_logger::init();
+    true
+});
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn get_remote_drives() {
-        let drives = Volume::get_remote_volumes().unwrap();
+    fn get_remote_volumes() {
+        assert!(*LOG_INIT);
+
+        let volumes = Volume::get_remote_volumes().unwrap();
         // As the result depends on the machine configuration, all this test can
         // check is if it doesn't fail.
         // You can check the result manually by:
         // ```
-        // cargo test -- get_remote_drives --nocapture
+        // cargo test -- get_remote_volumes --nocapture
         // ```
-        println!("{drives:?}");
+        for volume in volumes {
+            println!("{volume:?}");
+        }
     }
 
     #[test]
