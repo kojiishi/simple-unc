@@ -5,7 +5,7 @@ use crate::{Drives, PathExt};
 use std::{
     borrow::Cow,
     fs, io,
-    path::{Path, PathBuf},
+    path::{Path, PathBuf, StripPrefixError},
 };
 
 /// Simplifies [Win32 File Namespaces] paths (the "`\\?\`" prefix)
@@ -170,6 +170,16 @@ impl SimpleUnc {
     /// ```
     pub fn display<'a>(&'a self, path: &'a Path) -> Display<'a> {
         Display::new(self, path)
+    }
+
+    /// A snap-in replacement for [`Path::strip_prefix`]
+    /// with a fix for [a leading "`\`" left for UNC paths
+    /// on Windows](https://github.com/rust-lang/rust/issues/155183).
+    pub fn strip_prefix(path: &Path, base: impl AsRef<Path>) -> Result<&Path, StripPrefixError> {
+        #[cfg(windows)]
+        return PathExt::strip_prefix_fix(path, base);
+        #[cfg(not(windows))]
+        path.strip_prefix(base)
     }
 
     #[cfg(all(test, windows))]

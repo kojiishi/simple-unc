@@ -65,7 +65,7 @@ impl Drives {
 
     pub(crate) fn _drive_path<'a>(&self, path: &'a Path) -> Option<DrivePath<'a>> {
         for (drive_letter, root) in &self.drives {
-            if let Ok(suffix) = path.strip_prefix(root) {
+            if let Ok(suffix) = path.strip_prefix_fix(root) {
                 return Some(DrivePath::new(*drive_letter, suffix));
             }
         }
@@ -147,15 +147,13 @@ mod tests {
             ('X', PathBuf::from(r"\\?\UNC\server\share")),
             ('Z', PathBuf::from(r"\\?\UNC\server2\share2")),
         ]);
-        // `strip_prefix` may leave the leading `\`.
-        // https://github.com/rust-lang/rust/issues/155183
         assert_eq!(
             drives._drive_path(Path::new(r"\\?\UNC\server\share\dir\file.txt")),
-            Some(DrivePath::new('X', Path::new(r"\dir\file.txt")))
+            Some(DrivePath::new('X', Path::new(r"dir\file.txt")))
         );
         assert_eq!(
             drives._drive_path(Path::new(r"\\?\UNC\server2\share2\dir2\file2.txt")),
-            Some(DrivePath::new('Z', Path::new(r"\dir2\file2.txt"))),
+            Some(DrivePath::new('Z', Path::new(r"dir2\file2.txt"))),
         );
         assert_eq!(
             drives._drive_path(Path::new(r"\\?\UNC\server3\share3\dir3\file3.txt")),
