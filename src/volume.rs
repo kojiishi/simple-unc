@@ -1,12 +1,21 @@
 use crate::{DrivePath, PathExt};
 use std::{
+    borrow::Cow,
     cmp::Ordering,
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::{LazyLock, Mutex},
 };
 use windows::{
-    Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives},
+    Win32::{
+        Foundation::{ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, HANDLE, NO_ERROR},
+        NetworkManagement::WNet::{
+            NETRESOURCEW, RESOURCE_CONNECTED, RESOURCETYPE_DISK, WNET_OPEN_ENUM_USAGE,
+            WNetCloseEnum, WNetEnumResourceW, WNetOpenEnumW,
+        },
+        Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives},
+    },
     core::PCWSTR,
 };
 
@@ -16,26 +25,35 @@ static DRIVES: LazyLock<Mutex<Option<Drives>>> = LazyLock::new(|| Mutex::new(Non
 
 #[derive(Clone, Debug)]
 pub(crate) struct Drives {
-    drives: Vec<(char, PathBuf)>,
+    drives: Vec<Volume>,
 }
 
 impl Drives {
     fn new() -> anyhow::Result<Self> {
-        Ok(Self::with_drives(Self::get_remote_drives()?))
+        Ok(Self::with_drives(Volume::get_remote_volumes()?))
     }
 
-    pub(crate) fn with_drives(mut drives: Vec<(char, PathBuf)>) -> Self {
+    pub(crate) fn with_drives(mut drives: Vec<Volume>) -> Self {
         drives = Self::sort_drives(drives);
         Self { drives }
     }
 
+    #[cfg(all(test, windows))]
+    pub(crate) fn mock() -> Self {
+        Self::with_drives(vec![
+            Volume::new('X', PathBuf::from(r"\\?\UNC\server\share")),
+            Volume::new('Z', PathBuf::from(r"\\?\UNC\server2\share2")),
+            Volume::new('\0', PathBuf::from(r"\\?\UNC\server0\share0")),
+        ])
+    }
+
     /// The shortest path wins.
     /// If the lengths are the same, the lowest drive letter wins.
-    fn sort_drives(mut drives: Vec<(char, PathBuf)>) -> Vec<(char, PathBuf)> {
+    fn sort_drives(mut drives: Vec<Volume>) -> Vec<Volume> {
         drives.sort_by(|a, b| {
-            let mut cmp = a.1.as_os_str().len().cmp(&b.1.as_os_str().len());
+            let mut cmp = a.path.as_os_str().len().cmp(&b.path.as_os_str().len());
             if cmp == Ordering::Equal {
-                cmp = a.0.cmp(&b.0);
+                cmp = a.drive_letter.cmp(&b.drive_letter);
             }
             cmp
         });
@@ -64,15 +82,60 @@ impl Drives {
     }
 
     pub(crate) fn _drive_path<'a>(&self, path: &'a Path) -> Option<DrivePath<'a>> {
-        for (drive_letter, root) in &self.drives {
-            if let Ok(suffix) = path.strip_prefix_fix(root) {
-                return Some(DrivePath::new(*drive_letter, suffix));
+        for volume in &self.drives {
+            if let Ok(suffix) = path.strip_prefix_fix(&volume.path) {
+                return Some(DrivePath::new(volume.drive_letter, suffix));
             }
         }
         None
     }
+}
 
-    fn get_remote_drives() -> anyhow::Result<Vec<(char, PathBuf)>> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Volume {
+    drive_letter: char,
+    path: PathBuf,
+}
+
+impl Volume {
+    pub(crate) fn new(drive_letter: char, path: impl AsRef<Path>) -> Self {
+        Self {
+            drive_letter,
+            path: path.as_ref().into(),
+        }
+    }
+
+    fn has_drive(&self) -> bool {
+        self.drive_letter != '\0'
+    }
+
+    fn get_remote_volumes() -> anyhow::Result<Vec<Self>> {
+        // Get both drives and net resources and unify them.
+        // They often match, but there are cases where they don't, such as:
+        // 1. Third-Party Redirectors and Virtual Filesystems.
+        // 2. Offline/Disconnected Mapped Drives.
+        // 3. When network services are disabled, unresponsive, or in a
+        //    restricted context.
+        let drives = Self::get_remote_drives()?;
+        let net_resources = Self::get_net_resources()?;
+        let volumes = drives.into_iter().chain(net_resources);
+        let mut map: HashMap<PathBuf, Volume> = HashMap::new();
+        for volume in volumes {
+            match map.entry(volume.path.clone()) {
+                std::collections::hash_map::Entry::Occupied(mut occ) => {
+                    if !occ.get().has_drive() && volume.has_drive() {
+                        *occ.get_mut() = volume;
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(vac) => {
+                    vac.insert(volume);
+                }
+            }
+        }
+        Ok(map.values().cloned().collect())
+    }
+
+    fn get_remote_drives() -> anyhow::Result<Vec<Self>> {
         let mut drive_mask = unsafe { GetLogicalDrives() };
         if drive_mask == 0 {
             return Err(windows::core::Error::from_thread().into());
@@ -86,8 +149,9 @@ impl Drives {
                 let drive_type = unsafe { GetDriveTypeW(PCWSTR(path_u16.as_ptr())) };
                 if drive_type == DRIVE_REMOTE {
                     // Use `fs::canonicalize` to match the expected inputs.
+                    println!("Drive {drive_letter}: {path:?}");
                     let canonicalized = fs::canonicalize(path)?;
-                    drives.push((drive_letter, canonicalized));
+                    drives.push(Self::new(drive_letter, canonicalized));
                 }
             }
             drive_mask >>= 1;
@@ -97,6 +161,105 @@ impl Drives {
         }
         Ok(drives)
     }
+
+    fn get_net_resources() -> anyhow::Result<Vec<Volume>> {
+        let resources = unsafe { Self::_get_net_resources() }?;
+        let mut volumes = Vec::with_capacity(resources.len());
+        for (local, remote) in resources {
+            let Some(remote) = remote else {
+                continue;
+            };
+            let remote = Self::normalize_remote(&remote);
+            let drive_letter = Self::drive_letter_from_local(local);
+            volumes.push(Volume::new(drive_letter, remote.as_ref()));
+        }
+        Ok(volumes)
+    }
+
+    unsafe fn _get_net_resources() -> windows::core::Result<Vec<(Option<String>, Option<String>)>> {
+        let mut shares = Vec::new();
+        // for scope in [RESOURCE_CONNECTED, RESOURCE_REMEMBERED] {
+        let mut henum = HANDLE::default();
+        let res = unsafe {
+            WNetOpenEnumW(
+                RESOURCE_CONNECTED,
+                RESOURCETYPE_DISK,
+                WNET_OPEN_ENUM_USAGE(0),
+                None,
+                &mut henum,
+            )
+        };
+        if res != NO_ERROR {
+            return Err(windows::core::Error::from_hresult(res.to_hresult()));
+        }
+        let mut buffer = vec![0u8; 16384];
+        loop {
+            let mut count = 0xFFFFFFFF;
+            let mut buffer_size = buffer.len() as u32;
+            let res = unsafe {
+                WNetEnumResourceW(
+                    henum,
+                    &mut count,
+                    buffer.as_mut_ptr() as *mut _,
+                    &mut buffer_size,
+                )
+            };
+            match res {
+                NO_ERROR => {}
+                ERROR_NO_MORE_ITEMS => break,
+                ERROR_MORE_DATA => {
+                    buffer_size *= 2;
+                    buffer.resize(buffer_size as usize, 0);
+                    continue;
+                }
+                _ => return Err(windows::core::Error::from_hresult(res.to_hresult())),
+            }
+            let entries = count as usize;
+            let ptr = buffer.as_ptr() as *const NETRESOURCEW;
+            for i in 0..entries {
+                let resource = unsafe { &*ptr.add(i) };
+                let local_name = unsafe { pwstr_to_string(resource.lpLocalName) };
+                let remote_name = unsafe { pwstr_to_string(resource.lpRemoteName) };
+                println!("NetResource: {local_name:?}: {remote_name:?}");
+                shares.push((local_name, remote_name));
+            }
+        }
+        let _ = unsafe { WNetCloseEnum(henum) };
+        Ok(shares)
+    }
+
+    fn drive_letter_from_local(local: Option<String>) -> char {
+        if let Some(local) = local
+            && local.len() == 2
+            && local.as_bytes()[1] == b':'
+        {
+            local.as_bytes()[0] as char
+        } else {
+            '\0'
+        }
+    }
+
+    fn normalize_remote<'a>(mut remote: &'a str) -> Cow<'a, str> {
+        remote = remote.trim_end_matches('\\');
+        if let Some(stripped) = remote.strip_prefix(r"\\") {
+            return Cow::Owned(format!(r"\\?\UNC\{}", stripped));
+        }
+        Cow::Borrowed(remote)
+    }
+}
+
+unsafe fn pwstr_to_string(pwstr: windows::core::PWSTR) -> Option<String> {
+    if pwstr.0.is_null() {
+        return None;
+    }
+    let mut len = 0;
+    unsafe {
+        while *pwstr.0.add(len) != 0 {
+            len += 1;
+        }
+        let slice = std::slice::from_raw_parts(pwstr.0, len);
+        Some(String::from_utf16_lossy(slice))
+    }
 }
 
 #[cfg(test)]
@@ -105,7 +268,7 @@ mod tests {
 
     #[test]
     fn get_remote_drives() {
-        let drives = Drives::get_remote_drives().unwrap();
+        let drives = Volume::get_remote_volumes().unwrap();
         // As the result depends on the machine configuration, all this test can
         // check is if it doesn't fail.
         // You can check the result manually by:
@@ -119,19 +282,19 @@ mod tests {
     fn sort_drives() {
         assert_eq!(Drives::sort_drives(vec![]), vec![]);
         assert_eq!(
-            Drives::sort_drives(vec![('A', PathBuf::from("1"))]),
-            vec![('A', PathBuf::from("1"))]
+            Drives::sort_drives(vec![Volume::new('A', PathBuf::from("1"))]),
+            vec![Volume::new('A', PathBuf::from("1"))]
         );
         assert_eq!(
             Drives::sort_drives(vec![
-                ('C', PathBuf::from("12")),
-                ('A', PathBuf::from("123")),
-                ('B', PathBuf::from("12"))
+                Volume::new('C', PathBuf::from("12")),
+                Volume::new('A', PathBuf::from("123")),
+                Volume::new('B', PathBuf::from("12"))
             ]),
             vec![
-                ('B', PathBuf::from("12")),
-                ('C', PathBuf::from("12")),
-                ('A', PathBuf::from("123"))
+                Volume::new('B', PathBuf::from("12")),
+                Volume::new('C', PathBuf::from("12")),
+                Volume::new('A', PathBuf::from("123"))
             ]
         );
     }
@@ -143,9 +306,9 @@ mod tests {
     #[test]
     fn drive_path_win32_file_namespaces() {
         let drives = Drives::with_drives(vec![
-            ('H', PathBuf::from(r"\\?\UNC\server\share\dir")),
-            ('X', PathBuf::from(r"\\?\UNC\server\share")),
-            ('Z', PathBuf::from(r"\\?\UNC\server2\share2")),
+            Volume::new('H', PathBuf::from(r"\\?\UNC\server\share\dir")),
+            Volume::new('X', PathBuf::from(r"\\?\UNC\server\share")),
+            Volume::new('Z', PathBuf::from(r"\\?\UNC\server2\share2")),
         ]);
         assert_eq!(
             drives._drive_path(Path::new(r"\\?\UNC\server\share\dir\file.txt")),
@@ -160,5 +323,14 @@ mod tests {
             None,
         );
         assert_eq!(drives._drive_path(Path::new(r"C:\Windows\System32")), None);
+
+        let unmapped_drives = Drives::with_drives(vec![Volume::new(
+            '\0',
+            PathBuf::from(r"\\?\UNC\server\share"),
+        )]);
+        assert_eq!(
+            unmapped_drives._drive_path(Path::new(r"\\?\UNC\server\share\dir\file.txt")),
+            Some(DrivePath::new('\0', Path::new(r"dir\file.txt")))
+        );
     }
 }

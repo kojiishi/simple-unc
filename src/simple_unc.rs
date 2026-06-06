@@ -121,7 +121,10 @@ impl SimpleUnc {
     fn _simplify<'a>(&self, path: &'a Path) -> anyhow::Result<Option<Cow<'a, Path>>> {
         // Try mapped network share drives.
         if let Some(drive_path) = self.drive_path(path)? {
-            if self.map_to_drive && (!self.disallow_long || !drive_path.is_win32_long_path()) {
+            if self.map_to_drive
+                && drive_path.has_drive()
+                && (!self.disallow_long || !drive_path.is_win32_long_path())
+            {
                 return Ok(Some(Cow::Owned(drive_path.to_path_buf())));
             }
             if let Some(unc) = path.unc_from_win32_file_namespace(self.disallow_long) {
@@ -185,10 +188,7 @@ impl SimpleUnc {
     #[cfg(all(test, windows))]
     pub(crate) fn mock_with_drive() -> SimpleUnc {
         SimpleUnc {
-            drives: Some(Drives::with_drives(vec![
-                ('X', PathBuf::from(r"\\?\UNC\server\share")),
-                ('Z', PathBuf::from(r"\\?\UNC\server2\share2")),
-            ])),
+            drives: Some(Drives::mock()),
             ..Default::default()
         }
     }
@@ -262,5 +262,24 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(unc.simplify(Path::new(r"\\?\C:\foo")).unwrap(), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn simplify_unmapped_connected_share() {
+        let mut unc = SimpleUnc::mock_with_drive();
+        let path = Path::new(r"\\?\UNC\server0\share0\foo");
+        assert_eq!(
+            unc.simplify(path).unwrap(),
+            Some(Cow::Owned(PathBuf::from(r"\\server0\share0\foo")))
+        );
+
+        // Even with map_to_drive = true, it should simplify to the UNC path,
+        // because the drive letter is '\0'.
+        unc.map_to_drive = true;
+        assert_eq!(
+            unc.simplify(path).unwrap(),
+            Some(Cow::Owned(PathBuf::from(r"\\server0\share0\foo")))
+        );
     }
 }
