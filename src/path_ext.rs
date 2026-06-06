@@ -15,7 +15,7 @@ pub(crate) trait PathExt {
     /// Convert the [Win32 File Namespaces] to UNC.
     ///
     /// [Win32 File Namespaces]: https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#win32-file-namespaces
-    fn unc_from_win32_file_namespace(&self, allow_long: bool) -> Option<PathBuf>;
+    fn unc_from_win32_file_namespace(&self, disallow_long: bool) -> Option<PathBuf>;
 
     fn is_wide_longer_than(&self, max: u32) -> bool;
 
@@ -30,13 +30,13 @@ impl PathExt for Path {
             .starts_with(WIN32_FILE_NAMESPACE_UNC)
     }
 
-    fn unc_from_win32_file_namespace(&self, allow_long: bool) -> Option<PathBuf> {
+    fn unc_from_win32_file_namespace(&self, disallow_long: bool) -> Option<PathBuf> {
         if !self.is_win32_file_namespace_unc() {
             return None;
         }
         const PREFIX: &[u8] = br"\\";
         const LEN_SUB: usize = WIN32_FILE_NAMESPACE_UNC.len() - PREFIX.len();
-        if !allow_long && self.is_wide_longer_than(MAX_PATH + LEN_SUB as u32) {
+        if disallow_long && self.is_wide_longer_than(MAX_PATH + LEN_SUB as u32) {
             return None;
         }
         let bytes = self.as_os_str().as_encoded_bytes();
@@ -99,18 +99,18 @@ mod tests {
         const PATH_MAX: usize = MAX_PATH as usize - UNC_PREFIX.len() - SERVER_SHARE.len();
         let max_src = PREFIX.to_string() + SERVER_SHARE + &"1".repeat(PATH_MAX);
         assert_eq!(
-            Path::new(&max_src).unc_from_win32_file_namespace(false),
+            Path::new(&max_src).unc_from_win32_file_namespace(true),
             Some(PathBuf::from(
                 &(UNC_PREFIX.to_string() + SERVER_SHARE + &"1".repeat(PATH_MAX))
             ))
         );
         let too_long_src = PREFIX.to_string() + SERVER_SHARE + &"1".repeat(PATH_MAX + 1);
         assert_eq!(
-            Path::new(&too_long_src).unc_from_win32_file_namespace(false),
+            Path::new(&too_long_src).unc_from_win32_file_namespace(true),
             None
         );
         assert_eq!(
-            Path::new(&too_long_src).unc_from_win32_file_namespace(true),
+            Path::new(&too_long_src).unc_from_win32_file_namespace(false),
             Some(PathBuf::from(
                 &(UNC_PREFIX.to_string() + SERVER_SHARE + &"1".repeat(PATH_MAX + 1))
             ))

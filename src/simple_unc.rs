@@ -28,8 +28,9 @@ use std::{
 /// [Win32 File Namespaces]: https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#win32-file-namespaces
 #[derive(Debug, Default)]
 pub struct SimpleUnc {
-    /// When `false`, the simplification is disabled
-    /// if the result is a long path (longer than 260 characters).
+    /// When set to `true`,
+    /// the simplification is disabled
+    /// if the result is a "long path" (longer than 260 characters).
     ///
     /// Long paths may not be supported by some programs and APIs.
     /// In such cases, the [Win32 File Namespaces] (the "`\\?\`" prefix)
@@ -38,10 +39,9 @@ pub struct SimpleUnc {
     /// On the other hand,
     /// other programs such as PowerShell v7 can't handle the "`\\?\`" prefix,
     /// but it can handle long paths.
-    /// Set to `true` for such cases.
     ///
     /// [Win32 File Namespaces]: https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#win32-file-namespaces
-    pub allow_long: bool,
+    pub disallow_long: bool,
 
     /// Map to network share drive names when possible.
     /// ```
@@ -121,10 +121,10 @@ impl SimpleUnc {
     fn _simplify<'a>(&self, path: &'a Path) -> anyhow::Result<Option<Cow<'a, Path>>> {
         // Try mapped network share drives.
         if let Some(drive_path) = self.drive_path(path)? {
-            if self.map_to_drive && (self.allow_long || !drive_path.is_win32_long_path()) {
+            if self.map_to_drive && (!self.disallow_long || !drive_path.is_win32_long_path()) {
                 return Ok(Some(Cow::Owned(drive_path.to_path_buf())));
             }
-            if let Some(unc) = path.unc_from_win32_file_namespace(self.allow_long) {
+            if let Some(unc) = path.unc_from_win32_file_namespace(self.disallow_long) {
                 return Ok(Some(Cow::Owned(unc)));
             }
         }
