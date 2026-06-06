@@ -16,11 +16,10 @@ use windows::{
             WNetCloseEnum, WNetEnumResourceW, WNetOpenEnumW,
         },
         Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives},
+        System::WindowsProgramming::DRIVE_REMOTE,
     },
     core::PCWSTR,
 };
-
-const DRIVE_REMOTE: u32 = 4;
 
 static VOLUMES: LazyLock<Mutex<Option<Volumes>>> = LazyLock::new(|| Mutex::new(None));
 
