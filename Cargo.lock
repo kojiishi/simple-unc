@@ -234,7 +234,7 @@ dependencies = [
 
 [[package]]
 name = "simple-unc"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "anyhow",
  "dunce",

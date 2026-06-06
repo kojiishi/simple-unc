@@ -1,6 +1,6 @@
 [package]
 name = "simple-unc"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2024"
 rust-version = "1.88"
 description = "Simplify Windows UNC path for `fs::canonicalize`"
@@ -15,10 +15,10 @@ exclude = [".github", ".gitignore", ".vscode", "Taskfile.yml"]
 
 [dependencies]
 anyhow = "1.0.102"
-log = "0.4.32"
 
 [target.'cfg(windows)'.dependencies]
 dunce = "1.0.5"
+log = "0.4.32"
 windows = { version = "0.62.2", features = [
   "Win32_Foundation",
   "Win32_NetworkManagement_WNet",
