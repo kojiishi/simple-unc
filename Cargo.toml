@@ -20,5 +20,6 @@ anyhow = "1.0.102"
 dunce = "1.0.5"
 windows = { version = "0.62.2", features = [
   "Win32_Foundation",
+  "Win32_NetworkManagement_WNet",
   "Win32_Storage_FileSystem",
 ] }
