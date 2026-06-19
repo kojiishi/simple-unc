@@ -22,7 +22,7 @@ jobs:
         run: rustup --version
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Authenticate with crates.io
         id: auth
